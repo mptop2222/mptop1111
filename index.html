@@ -52,6 +52,10 @@
     .input-section {
       margin-bottom: 20px;
     }
+    
+    .latest-record {
+      background-color: #ffffcc; /* 淺黃色背景標記最新記錄 */
+    }
   </style>
 </head>
 <body>
@@ -115,14 +119,22 @@
     const errorSound = document.getElementById("errorSound");
 
     let clearTimer = null;
+    let latestRecordId = null;
 
-    // RFID刷卡處理
+    // RFID刷卡處理 - Enter鍵提交
     rfidInput.addEventListener("keydown", async function (event) {
       if (event.key === "Enter") {
         const rfid = rfidInput.value.trim();
         if (rfid !== "") {
           await processInput(rfid, "rfid");
         }
+      }
+    });
+
+    // 學號輸入處理 - Enter鍵提交
+    studentIdInput.addEventListener("keydown", async function (event) {
+      if (event.key === "Enter") {
+        await submitStudentId();
       }
     });
 
@@ -154,7 +166,8 @@
           status.classList.add("found");
           successSound.play();
 
-          await db.collection("rfid_records").add({
+          // 添加新記錄並獲取ID
+          const docRef = await db.collection("rfid_records").add({
             rfid: data.rfid || null,
             class: data.class,
             studentId: data.studentId,
@@ -162,12 +175,14 @@
             timestamp: firebase.firestore.FieldValue.serverTimestamp(),
             inputType: inputType
           });
+          latestRecordId = docRef.id;
         } else {
           status.textContent = `查無資料，${inputType === "rfid" ? "RFID" : "學號"}：${inputValue}`;
           status.classList.add("not-found");
           errorSound.play();
 
-          await db.collection("rfid_records").add({
+          // 添加新記錄並獲取ID
+          const docRef = await db.collection("rfid_records").add({
             rfid: inputType === "rfid" ? inputValue : null,
             class: null,
             studentId: inputType === "studentId" ? inputValue : null,
@@ -175,7 +190,11 @@
             timestamp: firebase.firestore.FieldValue.serverTimestamp(),
             inputType: inputType
           });
+          latestRecordId = docRef.id;
         }
+
+        // 查詢並刷新表格
+        await queryRecords();
 
         clearTimer = setTimeout(() => {
           status.textContent = "";
@@ -184,8 +203,10 @@
 
         if (inputType === "rfid") {
           rfidInput.value = "";
+          rfidInput.focus(); // 保持RFID輸入框焦點
         } else {
           studentIdInput.value = "";
+          studentIdInput.focus(); // 保持學號輸入框焦點
         }
       } catch (error) {
         status.textContent = "操作失敗：" + error.message;
@@ -201,7 +222,13 @@
 
     async function queryRecords() {
       const dateStr = document.getElementById("queryDate").value;
-      if (!dateStr) return alert("請選擇日期");
+      if (!dateStr) {
+        // 如果沒有選擇日期，使用今天日期
+        const today = new Date();
+        const dateInput = document.getElementById("queryDate");
+        dateInput.valueAsDate = today;
+        return await queryRecords(); // 重新調用自身
+      }
 
       const date = new Date(dateStr);
       const start = new Date(date.setHours(0, 0, 0, 0));
@@ -210,7 +237,7 @@
       const snapshot = await db.collection("rfid_records")
         .where("timestamp", ">=", start)
         .where("timestamp", "<=", end)
-        .orderBy("timestamp", "asc")
+        .orderBy("timestamp", "desc") // 按時間降序排列，最新記錄在最上面
         .get();
 
       const tbody = document.getElementById("recordsBody");
@@ -222,6 +249,10 @@
         const inputType = data.inputType === "rfid" ? "RFID刷卡" : "學號輸入";
 
         const row = document.createElement("tr");
+        // 如果是最新記錄，添加特殊class
+        if (doc.id === latestRecordId) {
+          row.classList.add("latest-record");
+        }
         row.innerHTML = `
           <td>${data.class || ""}</td>
           <td>${data.studentId || ""}</td>
@@ -231,7 +262,15 @@
         `;
         tbody.appendChild(row);
       });
+      
+      // 重置最新記錄標記，避免下次查詢時仍然高亮
+      latestRecordId = null;
     }
+
+    // 頁面加載時自動查詢當天記錄
+    window.onload = function() {
+      queryRecords();
+    };
   </script>
 </body>
 </html>
