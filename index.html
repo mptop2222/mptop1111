@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>RFID 刷卡上傳與查詢</title>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <style>
+    body {
+      text-align: center;
+      font-family: Arial, sans-serif;
+      padding: 30px;
+    }
+
+    input, button {
+      font-size: 20px;
+      margin: 10px;
+      padding: 10px;
+    }
+
+    #rfidInput, #studentIdInput {
+      font-size: 40px;
+      width: 60%;
+    }
+
+    #status {
+      font-size: 80px;
+      font-weight: bold;
+      margin-top: 40px;
+    }
+
+    .found { color: blue; }
+    .not-found { color: red; }
+    .error { color: orange; }
+
+    #recordsTable {
+      margin-top: 40px;
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 20px;
+    }
+
+    #recordsTable th, #recordsTable td {
+      border: 1px solid #999;
+      padding: 10px;
+    }
+
+    #recordsTable th {
+      background-color: #eee;
+    }
+
+    .input-section {
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>南山中學刷卡系統</h1>
+  
+  <div class="input-section">
+    <h2>🔖 RFID刷卡</h2>
+    <input type="text" id="rfidInput" autofocus placeholder="請刷卡" />
+  </div>
+  
+  <div class="input-section">
+    <h2>🆔 學號輸入</h2>
+    <input type="text" id="studentIdInput" placeholder="請輸入學號" />
+    <button onclick="submitStudentId()">提交</button>
+  </div>
+  
+  <p id="status"></p>
+
+  <!-- 音效 -->
+  <audio id="successSound" src="success.mp3" preload="auto"></audio>
+  <audio id="errorSound" src="error.mp3" preload="auto"></audio>
+
+  <hr />
+  <h2>📅 查詢刷卡紀錄</h2>
+  <input type="date" id="queryDate" />
+  <button onclick="queryRecords()">查詢</button>
+  <button onclick="window.print()">列印</button>
+
+  <table id="recordsTable">
+    <thead>
+      <tr>
+        <th>班級</th>
+        <th>學號</th>
+        <th>姓名</th>
+        <th>刷卡時間</th>
+        <th>類型</th>
+      </tr>
+    </thead>
+    <tbody id="recordsBody">
+    </tbody>
+  </table>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDIBZcv7FDus86I_tqMNdGaTGLFUH9TkGg",
+      authDomain: "new123-88a1a.firebaseapp.com",
+      databaseURL: "https://new123-88a1a-default-rtdb.firebaseio.com",
+      projectId: "new123-88a1a",
+      storageBucket: "new123-88a1a.appspot.com",
+      messagingSenderId: "1098459270837",
+      appId: "1:1098459270837:web:51532d8f2cffbf9271b8fc"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    const rfidInput = document.getElementById("rfidInput");
+    const studentIdInput = document.getElementById("studentIdInput");
+    const status = document.getElementById("status");
+    const successSound = document.getElementById("successSound");
+    const errorSound = document.getElementById("errorSound");
+
+    let clearTimer = null;
+
+    // RFID刷卡處理
+    rfidInput.addEventListener("keydown", async function (event) {
+      if (event.key === "Enter") {
+        const rfid = rfidInput.value.trim();
+        if (rfid !== "") {
+          await processInput(rfid, "rfid");
+        }
+      }
+    });
+
+    // 學號提交處理
+    async function submitStudentId() {
+      const studentId = studentIdInput.value.trim();
+      if (studentId !== "") {
+        await processInput(studentId, "studentId");
+      }
+    }
+
+    // 通用輸入處理函數
+    async function processInput(inputValue, inputType) {
+      try {
+        let querySnapshot;
+        
+        if (inputType === "rfid") {
+          querySnapshot = await db.collection("students").where("rfid", "==", inputValue).get();
+        } else { // studentId
+          querySnapshot = await db.collection("students").where("studentId", "==", inputValue).get();
+        }
+        
+        status.className = "";
+        clearTimeout(clearTimer);
+
+        if (!querySnapshot.empty) {
+          const data = querySnapshot.docs[0].data();
+          status.textContent = `班級：${data.class}，學號：${data.studentId}，姓名：${data.name}`;
+          status.classList.add("found");
+          successSound.play();
+
+          await db.collection("rfid_records").add({
+            rfid: data.rfid || null,
+            class: data.class,
+            studentId: data.studentId,
+            name: data.name,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+            inputType: inputType
+          });
+        } else {
+          status.textContent = `查無資料，${inputType === "rfid" ? "RFID" : "學號"}：${inputValue}`;
+          status.classList.add("not-found");
+          errorSound.play();
+
+          await db.collection("rfid_records").add({
+            rfid: inputType === "rfid" ? inputValue : null,
+            class: null,
+            studentId: inputType === "studentId" ? inputValue : null,
+            name: null,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+            inputType: inputType
+          });
+        }
+
+        clearTimer = setTimeout(() => {
+          status.textContent = "";
+          status.className = "";
+        }, 3000);
+
+        if (inputType === "rfid") {
+          rfidInput.value = "";
+        } else {
+          studentIdInput.value = "";
+        }
+      } catch (error) {
+        status.textContent = "操作失敗：" + error.message;
+        status.className = "error";
+        errorSound.play();
+
+        clearTimer = setTimeout(() => {
+          status.textContent = "";
+          status.className = "";
+        }, 3000);
+      }
+    }
+
+    async function queryRecords() {
+      const dateStr = document.getElementById("queryDate").value;
+      if (!dateStr) return alert("請選擇日期");
+
+      const date = new Date(dateStr);
+      const start = new Date(date.setHours(0, 0, 0, 0));
+      const end = new Date(date.setHours(23, 59, 59, 999));
+
+      const snapshot = await db.collection("rfid_records")
+        .where("timestamp", ">=", start)
+        .where("timestamp", "<=", end)
+        .orderBy("timestamp", "asc")
+        .get();
+
+      const tbody = document.getElementById("recordsBody");
+      tbody.innerHTML = "";
+
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const time = data.timestamp?.toDate().toLocaleTimeString("zh-TW") || "無時間";
+        const inputType = data.inputType === "rfid" ? "RFID刷卡" : "學號輸入";
+
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${data.class || ""}</td>
+          <td>${data.studentId || ""}</td>
+          <td>${data.name || ""}</td>
+          <td>${time}</td>
+          <td>${inputType}</td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+  </script>
+</body>
+</html>
