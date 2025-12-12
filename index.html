@@ -174,6 +174,7 @@
         <th>姓名</th>
         <th>刷卡時間</th>
         <th>類型</th>
+        <th>名單狀態</th>
       </tr>
     </thead>
     <tbody id="recordsBody">
@@ -244,11 +245,43 @@
       }
     }
 
+    // 檢查學生是否在 Word 名單中
+    function checkIfInWordRoster(studentName) {
+      if (!wordViewer || !wordViewer.innerHTML || !studentName) {
+        return false; // 如果沒有載入 Word 或沒有學生姓名，視為不在名單中
+      }
+      
+      // 檢查姓名是否出現在 Word 內容中
+      const wordContent = wordViewer.textContent || wordViewer.innerText;
+      return wordContent.includes(studentName);
+    }
+
+    // 播放3次錯誤音效
+    function playErrorSoundThreeTimes() {
+      let playCount = 0;
+      const maxPlayCount = 3;
+      
+      function playSound() {
+        if (playCount < maxPlayCount) {
+          // 重新載入音效以確保可以連續播放
+          errorSound.currentTime = 0;
+          errorSound.play();
+          playCount++;
+          
+          // 間隔0.5秒播放下一次
+          setTimeout(playSound, 500);
+        }
+      }
+      
+      playSound();
+    }
+
     // 通用輸入處理函數
     async function processInput(inputValue, inputType) {
       try {
         let querySnapshot;
         let studentName = null;
+        let studentData = null;
         
         if (inputType === "rfid") {
           querySnapshot = await db.collection("students").where("rfid", "==", inputValue).get();
@@ -262,9 +295,21 @@
         if (!querySnapshot.empty) {
           const data = querySnapshot.docs[0].data();
           studentName = data.name;
-          status.textContent = `班級：${data.class}，學號：${data.studentId}，姓名：${data.name}`;
-          status.classList.add("found");
-          successSound.play();
+          studentData = data;
+          
+          // 檢查是否在 Word 名單中
+          const isInWordRoster = checkIfInWordRoster(studentName);
+          
+          if (isInWordRoster) {
+            status.textContent = `班級：${data.class}，學號：${data.studentId}，姓名：${data.name}`;
+            status.classList.add("found");
+            successSound.play();
+          } else {
+            status.textContent = `班級：${data.class}，學號：${data.studentId}，姓名：${data.name}（未在生教名單內）`;
+            status.classList.add("not-found");
+            // 播放3聲錯誤音效
+            playErrorSoundThreeTimes();
+          }
 
           const docRef = await db.collection("rfid_records").add({
             rfid: data.rfid || null,
@@ -272,13 +317,15 @@
             studentId: data.studentId,
             name: data.name,
             timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-            inputType: inputType
+            inputType: inputType,
+            inRoster: isInWordRoster // 新增欄位記錄是否在名單內
           });
           latestRecordId = docRef.id;
         } else {
           status.textContent = `查無資料，${inputType === "rfid" ? "RFID" : "學號"}：${inputValue}`;
           status.classList.add("not-found");
-          errorSound.play();
+          // 播放3聲錯誤音效
+          playErrorSoundThreeTimes();
 
           const docRef = await db.collection("rfid_records").add({
             rfid: inputType === "rfid" ? inputValue : null,
@@ -286,7 +333,8 @@
             studentId: inputType === "studentId" ? inputValue : null,
             name: null,
             timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-            inputType: inputType
+            inputType: inputType,
+            inRoster: false
           });
           latestRecordId = docRef.id;
         }
@@ -403,6 +451,11 @@
         const data = doc.data();
         const time = data.timestamp?.toDate().toLocaleString("zh-TW") || "無時間";
         const inputType = data.inputType === "rfid" ? "RFID刷卡" : "學號輸入";
+        
+        // 判斷是否在名單內
+        const inRosterStatus = data.inRoster === false ? 
+          '<span style="color: red;">❌ 未在生教名單內</span>' : 
+          '<span style="color: green;">✓ 在生教名單內</span>';
 
         const row = document.createElement("tr");
         if (doc.id === latestRecordId) {
@@ -414,6 +467,7 @@
           <td>${data.name || ""}</td>
           <td>${time}</td>
           <td>${inputType}</td>
+          <td>${inRosterStatus}</td>
         `;
         tbody.appendChild(row);
       });
@@ -460,6 +514,8 @@
 
     // 在Word內容中高亮顯示姓名（保留原始格式）
     function highlightNameInWord(name) {
+      if (!name) return;
+      
       if (highlightedNames.has(name)) {
         return;
       }
@@ -539,16 +595,17 @@
     window.onload = function() {
       queryRecordsByDate();
     };
-function downloadExcel() {
-  const table = document.getElementById("recordsTable");
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.table_to_sheet(table);
 
-  XLSX.utils.book_append_sheet(wb, ws, "刷卡紀錄");
+    function downloadExcel() {
+      const table = document.getElementById("recordsTable");
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.table_to_sheet(table);
 
-  const filename = "刷卡紀錄_" + new Date().toISOString().slice(0,10) + ".xlsx";
-  XLSX.writeFile(wb, filename);
-}
+      XLSX.utils.book_append_sheet(wb, ws, "刷卡紀錄");
+
+      const filename = "刷卡紀錄_" + new Date().toISOString().slice(0,10) + ".xlsx";
+      XLSX.writeFile(wb, filename);
+    }
 
   </script>
 </body>
